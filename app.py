@@ -37,9 +37,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("⚡ Premium Binance 24/7 Top 100 Scanner")
-st.write("Streamlit Cloud অপ্টিমাইজড এডিশন। ব্যাকগ্রাউন্ড ও ফ্রন্টএন্ড এখন একসাথে ২৪ ঘণ্টা লাইভ রান করবে।")
+st.write("Streamlit Cloud অপ্টিমাইজড এডিশন। কোনো কানেকশন লিক বা মেমোরি ক্র্যাশ ছাড়াই ২৪ ঘণ্টা লাইভ রান করবে।")
 
-# সেশন স্টেট ইনিশিয়ালাইজেশন (সার্ভার ফ্রেন্ডলি)
+# সেশন স্টেট ইনিশিয়ালাইজেশন
 if "last_scan_time" not in st.session_state:
     st.session_state.last_scan_time = "এখনো স্ক্যান হয়নি"
     st.session_state.bullish_coins = []
@@ -76,66 +76,87 @@ async def fetch_and_calculate_ema(exchange, symbol):
 
 async def run_single_scan():
     st.session_state.is_scanning = True
-    exchange = ccxtpro.binance({'enableRateLimit': True, 'options': {'defaultType': 'future', 'adjustForTimeDifference': True}})
-    symbols_to_scan = await fetch_top_100_futures(exchange)
     
-    if not symbols_to_scan:
-        await exchange.close()
-        st.session_state.is_scanning = False
-        return
-
-    bullish_list = []
-    total_coins = len(symbols_to_scan)
-    st.session_state.total_scanned = total_coins
+    # এরর এড়াতে প্রতি রাউন্ডে একদম ফ্রেশ ইনস্ট্যান্স তৈরি করা হচ্ছে
+    exchange = ccxtpro.binance({
+        'enableRateLimit': True, 
+        'options': {
+            'defaultType': 'future', 
+            'adjustForTimeDifference': True
+        }
+    })
     
-    batch_size = 5
-    for i in range(0, total_coins, batch_size):
-        batch = symbols_to_scan[i:i+batch_size]
-        perc = int(((i + len(batch)) / total_coins) * 100)
-        st.session_state.active_coin = batch[0].split('/')[0]
-        st.session_state.current_progress = f"🔍 স্ক্যানিং প্রোগ্রেস: {perc}% ({min(i+batch_size, total_coins)}/{total_coins})"
+    try:
+        symbols_to_scan = await fetch_top_100_futures(exchange)
         
-        # স্ক্রিন লাইভ আপডেট করার ট্রিক
-        progress_placeholder.markdown(f"""
-            <div class="scanning-box">
-                <p style="color: #38bdf8; font-size: 1.1rem; margin-bottom: 2px; font-weight: 600;">{st.session_state.current_progress}</p>
-                <div class="scanning-coin">🔄 {st.session_state.active_coin}</div>
-            </div>
-        """, unsafe_allow_html=True)
+        if not symbols_to_scan:
+            return
 
-        tasks = [fetch_and_calculate_ema(exchange, symbol) for symbol in batch]
-        results = await asyncio.gather(*tasks)
-        for res in results:
-            if res: bullish_list.append(res)
-        await asyncio.sleep(0.1)
+        bullish_list = []
+        total_coins = len(symbols_to_scan)
+        st.session_state.total_scanned = total_coins
+        
+        batch_size = 5
+        for i in range(0, total_coins, batch_size):
+            batch = symbols_to_scan[i:i+batch_size]
+            perc = int(((i + len(batch)) / total_coins) * 100)
+            st.session_state.active_coin = batch[0].split('/')[0]
+            st.session_state.current_progress = f"🔍 স্ক্যানিং প্রোগ্রেস: {perc}% ({min(i+batch_size, total_coins)}/{total_coins})"
+            
+            # UI লাইভ আপডেট
+            progress_placeholder.markdown(f"""
+                <div class="scanning-box">
+                    <p style="color: #38bdf8; font-size: 1.1rem; margin-bottom: 2px; font-weight: 600;">{st.session_state.current_progress}</p>
+                    <div class="scanning-coin">🔄 {st.session_state.active_coin}</div>
+                </div>
+            """, unsafe_allow_html=True)
 
-    await exchange.close()
-    st.session_state.bullish_coins = bullish_list
-    st.session_state.last_scan_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    st.session_state.current_progress = "সম্পন্ন (পরবর্তী লাইভ রান ১৫ মিনিট পর অটোমেটিক শুরু হবে)"
-    st.session_state.is_scanning = False
+            tasks = [fetch_and_calculate_ema(exchange, symbol) for symbol in batch]
+            results = await asyncio.gather(*tasks)
+            for res in results:
+                if res: bullish_list.append(res)
+            await asyncio.sleep(0.1)
 
-    # --- TELEGRAM ALERTS ---
-    if bullish_list:
-        tg_msg = f"🔔 *Binance 15M Top 100 EMA Report*\n⏰ সময়: `{st.session_state.last_scan_time}`\n📊 বুলিশ কয়েন: `{len(bullish_list)}`\n\n"
-        for coin in bullish_list[:25]:
-            tg_msg += f"• `{coin['Symbol']}`: ${coin['Price']} (+{coin['Distance (%)']}%)\n"
-    else:
-        tg_msg = f"ℹ️ *Binance Scan Completed*\n⏰ সময়: `{st.session_state.last_scan_time}`\nকোনো বুলিশ কয়েন পাওয়া যায়নি।"
-    send_telegram_message(tg_msg)
+        # ডাটা সেভ করা
+        st.session_state.bullish_coins = bullish_list
+        st.session_state.last_scan_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        st.session_state.current_progress = "সম্পন্ন (পরবর্তী লাইভ রান ১৫ মিনিট পর অটোমেটিক শুরু হবে)"
+        
+        # --- TELEGRAM ALERTS ---
+        if bullish_list:
+            tg_msg = f"🔔 *Binance 15M Top 100 EMA Report*\n⏰ সময়: `{st.session_state.last_scan_time}`\n📊 মোট স্ক্যান: `{total_coins}` | বুলিশ কয়েন: `{len(bullish_list)}`\n\n"
+            for coin in bullish_list[:25]:
+                tg_msg += f"• `{coin['Symbol']}`: ${coin['Price']} (+{coin['Distance (%)']}%)\n"
+        else:
+            tg_msg = f"ℹ️ *Binance Scan Completed*\n⏰ সময়: `{st.session_state.last_scan_time}`\nকোনো বুলিশ কয়েন পাওয়া যায়নি।"
+        send_telegram_message(tg_msg)
+
+    except Exception as scan_error:
+        print(f"Scan Loop Error: {scan_error}")
+        
+    finally:
+        # --- UNCLOSED CONNECTOR FIX ---
+        try:
+            await exchange.close()
+            # aiohttp কানেক্টর ক্লোজ হওয়ার জন্য ০.২৫ সেকেন্ডের সেফটি বাফার
+            await asyncio.sleep(0.25) 
+        except:
+            pass
+        st.session_state.is_scanning = False
+        st.session_state.active_coin = "FINISHED"
 
 # --- UI RENDER CORNER ---
 
 progress_placeholder = st.empty()
 
-# রিয়েল-টাইম কাউন্টার ও স্ট্যাটাস রেন্ডারার (Fragment দিয়ে অটো রিফ্রেশ হবে ১০ সেকেন্ড পর পর)
+# রিয়েল-টাইম কাউন্টার ও স্ট্যাটাস রেন্ডারার
 @st.fragment(run_every=10)
 def render_live_dashboard():
     if not st.session_state.is_scanning and st.session_state.last_scan_time != "এখনো স্ক্যান হয়নি":
-        # চেক করা হচ্ছে ১৫ মিনিট পার হয়েছে কিনা, পার হলে অটো রান হবে
+        # চেক করা হচ্ছে ১৫ মিনিট পার হয়েছে কিনা
         last_time = datetime.strptime(st.session_state.last_scan_time, "%Y-%m-%d %H:%M:%S")
         elapsed_seconds = (datetime.now() - last_time).total_seconds()
-        if elapsed_seconds >= 900:  # 900 seconds = 15 Mins
+        if elapsed_seconds >= 900:  
             with st.spinner("১৫ মিনিট পূর্ণ হয়েছে! নতুন স্ক্যান শুরু হচ্ছে..."):
                 asyncio.run(run_single_scan())
                 st.rerun()
@@ -167,7 +188,7 @@ def render_live_dashboard():
 # ড্যাশবোর্ড রেন্ডার
 render_live_dashboard()
 
-# ম্যানুয়াল ট্রিগার বাটন (প্রথমবার সার্ভার চালু করার জন্য স্পেশাল)
+# ম্যানুয়াল ট্রিগার বাতন
 if not st.session_state.is_scanning:
     if st.button("🚀 ম্যানুয়ালি স্ক্যান শুরু করুন (Force Run)"):
         with st.spinner("প্রথম রাউন্ড স্ক্যান চলছে..."):
