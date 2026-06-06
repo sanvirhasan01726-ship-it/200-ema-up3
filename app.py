@@ -1,5 +1,5 @@
 import streamlit as st
-import ccxt.pro as ccxtpro  # Fast Async Binance Call এর জন্য
+import ccxt.async_support as ccxt  # ccxt.pro এর বদলে স্ট্যান্ডার্ড এসিনক্রোনাস সাপোর্ট ব্যবহার করা হলো
 import asyncio
 import pandas as pd
 import pandas_ta as ta
@@ -180,14 +180,15 @@ async def fetch_and_calculate_ema(exchange, symbol):
 
 async def run_scanner():
     """মূল স্ক্যানিং প্রসেস যা লুপ আকারে চলবে"""
-    exchange = ccxtpro.binance({
-        'enableRateLimit': True,
-        'options': {
-            'defaultType': 'swap'  # সুনির্দিষ্টভাবে Perpetual Swap সেট করা হলো
-        }
-    })
-    
     while True:
+        # প্রতি লুপে ফ্রেশ এসিনক্রোনাস কানেকশন ওপেন হবে
+        exchange = ccxt.binance({
+            'enableRateLimit': True,
+            'options': {
+                'defaultType': 'swap'
+            }
+        })
+        
         try:
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             live_status_box.markdown(f"### 🔄 নতুন স্ক্যান শুরু হচ্ছে... (সময়: {current_time})")
@@ -235,11 +236,9 @@ async def run_scanner():
                 col1.metric("মোট স্ক্যান করা কয়েন", total_coins)
                 col2.metric("200 EMA-এর উপরে বুলিশ কয়েন", len(bullish_coins))
             
-            # টেবিল জেনারেশন এবং টেলিগ্রাম নোটিফিকেশন প্রেরণ
+            # টেবিল জেনারেশন এবং নোটিফিকেশন প্রেরণ
             if bullish_coins:
                 df_result = pd.DataFrame(bullish_coins)
-                
-                # UI এর জন্য HTML বাটন তৈরি
                 df_result['Action'] = df_result['Symbol'].apply(
                     lambda sym: f'<a href="{generate_binance_url(sym)}" target="_blank" class="binance-btn">🔗 Trade on Binance</a>'
                 )
@@ -250,7 +249,7 @@ async def run_scanner():
                     st.markdown(f"### 📈 বুলিশ কয়েন লিস্ট (Last Update: {datetime.now().strftime('%H:%M:%S')})")
                     st.markdown(table_html, unsafe_allow_html=True)
                 
-                # --- টেলিগ্রাম সেফ মেসেজ জেনারেশন (Chunks-এ ভাগ করা) ---
+                # --- টেলিগ্রাম সেফ মেসেজ জেনারেশন (Chunks) ---
                 header = f"🚨 <b>Binance 200 EMA Scanner Report</b> 🚨\n"
                 header += f"📅 সময়: {current_time}\n"
                 header += f"📊 মোট স্ক্যান করা কয়েন: {total_coins}\n"
@@ -271,16 +270,14 @@ async def run_scanner():
                     coin_text += f"   • ব্যবধান: {coin['Distance (%)']}%\n"
                     coin_text += f"   • <a href='{trade_url}'>🔗 Trade Here</a>\n\n"
                     
-                    # যদি নতুন কয়েনের টেক্সট যোগ করলে ৩০০০ ক্যারেক্টার পার হয়ে যায়, তবে বর্তমান চাংকটি পাঠিয়ে দেবো
                     if len(current_chunk) + len(coin_text) > 3000:
                         await send_telegram_message(current_chunk + f"<i>[Part {chunk_count}]</i>")
-                        await asyncio.sleep(0.5)  # টেলিগ্রাম রেট লিমিট এড়াতে সাময়িক বিরতি
+                        await asyncio.sleep(0.5)
                         current_chunk = f"<b>📈 200 EMA Scanner Report (Continued...)</b>\n--------------------------------------\n\n" + coin_text
                         chunk_count += 1
                     else:
                         current_chunk += coin_text
                 
-                # শেষ বা অবশিষ্ট অংশটুকু পাঠানো হচ্ছে
                 if current_chunk != header:
                     if chunk_count > 1:
                         await send_telegram_message(current_chunk + f"<i>[Part {chunk_count} - End]</i>")
@@ -294,12 +291,16 @@ async def run_scanner():
                 empty_msg = f"🔄 <b>Scanner Update ({current_time}):</b>\nএই মুহূর্তে ২০০ EMA এর উপরে কোনো বুলিশ কয়েন পাওয়া যায়নি।"
                 await send_telegram_message(empty_msg)
             
-            st.info("⏱️ স্ক্যান সম্পন্ন হয়েছে। পরবর্তী স্ক্যান ১৫ মিনিট পর স্বয়ংক্রিয়ভাবে শুরু হবে।")
+            st.info("⏱️ স্ক্যান সম্পন্ন হয়েছে। পরবর্তী স্ক্যান ১৫ মিনিট পর স্বয়ংক্রিয়ভাবে শুরু হবে suicide প্রতিরোধে রেস্ট মোড সক্রিয়।")
             await asyncio.sleep(900)
             
         except Exception as e:
             st.error(f"লুপে সমস্যা হয়েছে: {e}")
             await asyncio.sleep(30)
+            
+        finally:
+            # সেশন আনক্লোজড থাকা আটকাতে বাধ্যতামুলকভাবে কানেকশন বন্ধ করা হচ্ছে
+            await exchange.close()
 
 if __name__ == "__main__":
     try:
