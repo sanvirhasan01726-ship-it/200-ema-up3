@@ -3,7 +3,7 @@ import ccxt.async_support as ccxt  # স্ট্যান্ডার্ড এ
 import asyncio
 import pandas as pd
 from datetime import datetime
-import httpx  # Async Telegram API এবং অল্টারনেটিভ API কলের জন্য
+import httpx  # CoinGecko ও Telegram API কলের জন্য
 
 # Streamlit Page Configuration
 st.set_page_config(page_title="Binance 200 EMA Scanner", layout="wide")
@@ -88,47 +88,42 @@ def generate_binance_url(symbol):
     clean_symbol = symbol.split(':')[0].replace('/', '')
     return f"https://www.binance.com/en/futures/{clean_symbol}"
 
-# --- ALTERNATIVE API FETCHING (NO BLOCK) ---
+# --- COINGECKO API FOR TOP COINS (NO BLOCKING) ---
 
-async def fetch_top_350_bybit_backup():
-    """বাইনান্স ব্লক থাকলে বাইবিট API ব্যবহার করে টপ ভলিউম কয়েন লিস্ট তৈরি করবে"""
+async def fetch_top_350_from_coingecko():
+    """মার্কেট ক্যাপ অনুযায়ী ক্র্যাশ-ফ্রি কয়েন লিস্ট কোইনগেকো থেকে নিয়ে আসবে"""
     try:
         async with httpx.AsyncClient() as client:
-            # বাইবিটের পাবলিক এন্ডপয়েন্ট যা কোনো সার্ভার আইপি ব্লক করে না
-            response = await client.get("https://api.bybit.com/v5/market/tickers?category=linear", timeout=15.0)
+            # আমেরিকার সার্ভার আইপি থেকে কয়েনগেকো ব্লক করে না
+            url = "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1"
+            response = await client.get(url, timeout=15.0)
+            
+            url2 = "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=2"
+            response2 = await client.get(url2, timeout=15.0)
+            
+            symbols = []
             if response.status_code == 200:
-                data = response.json()
-                tickers = data.get('result', {}).get('list', [])
-                # শুধু USDT পেয়ার ফিল্টার এবং ভলিউম অনুযায়ী সর্টিং
-                usdt_tickers = [t for t in tickers if t['symbol'].endswith('USDT')]
-                sorted_tickers = sorted(usdt_tickers, key=lambda x: float(x.get('volume24h', 0)), reverse=True)
-                
-                # বাইনান্স ফরমেটে কনভার্ট করা (যেমন: BTCUSDT -> BTC/USDT:USDT)
-                top_350_symbols = []
-                for t in sorted_tickers[:350]:
-                    base = t['symbol'].replace('USDT', '')
-                    top_350_symbols.append(f"{base}/USDT:USDT")
-                return top_350_symbols
+                for coin in response.json():
+                    sym = coin['symbol'].upper()
+                    # স্টেবল কয়েন বাদ দেওয়া হচ্ছে
+                    if sym not in ['USDT', 'USDC', 'BUSD', 'DAI', 'FDUSD']:
+                        symbols.append(f"{sym}/USDT:USDT")
+                        
+            if response2.status_code == 200:
+                for coin in response2.json():
+                    sym = coin['symbol'].upper()
+                    if sym not in ['USDT', 'USDC', 'BUSD', 'DAI', 'FDUSD']:
+                        symbols.append(f"{sym}/USDT:USDT")
+                        
+            return symbols[:350]
     except Exception as e:
-        st.error(f"ব্যাকআপ বাইবিট API ও কাজ করছে না: {e}")
+        st.error(f"CoinGecko API এরর: {e}")
     return []
-
-async def fetch_top_350_futures(exchange):
-    """২৪ ঘণ্টার ভলিউম অনুযায়ী পেয়ার নিয়ে আসে (বাইনান্স ব্যর্থ হলে বাইবিট দিয়ে ট্রাই করবে)"""
-    try:
-        markets = await exchange.load_markets()
-        futures_pairs = [symbol for symbol, market in markets.items() if market.get('active') and market.get('linear') and market.get('swap') and market.get('settle') == 'USDT']
-        
-        tickers = await exchange.fetch_tickers(futures_pairs)
-        sorted_tickers = sorted(tickers.values(), key=lambda x: x.get('quoteVolume', 0) if x.get('quoteVolume') is not None else 0, reverse=True)
-        return [ticker['symbol'] for ticker in sorted_tickers[:350]]
-    except Exception:
-        # মেইন এক্সচেঞ্জ ব্লক খেলে অটোমেটিক বাইবিট ব্যাকআপ মেথড চালু হবে
-        return await fetch_top_350_bybit_backup()
 
 async def fetch_and_calculate_ema(exchange, symbol):
     """নির্দিষ্ট কয়েনের ওহী ও পিওর পান্ডাস দিয়ে ২০০ EMA হিসাব করে"""
     try:
+        # ওহী ডাটার জন্য আমরা বাইনান্সের অফিশিয়াল চার্ট ডিরেক্টরি রিকোয়েস্ট পাঠাবো
         ohlcv = await exchange.fetch_ohlcv(symbol, timeframe='15m', limit=250)
         if len(ohlcv) < 200:
             return None
@@ -156,12 +151,12 @@ async def fetch_and_calculate_ema(exchange, symbol):
 async def run_scanner():
     """মূল স্ক্যানিং প্রসেস যা লুপ আকারে চলবে"""
     while True:
-        # এখানে এপিআই এর ডোমেইন সম্পূর্ণ পরিবর্তন করে গ্লোবাল ক্লাউড গেটওয়ে (binance.vision) ব্যবহার করা হয়েছে
+        # বাইনান্স এপিআই লোড করার জন্য অল্টারনেটিভ গ্লোবাল পাবলিক গেটওয়ে
         exchange = ccxt.binance({
             'enableRateLimit': True,
             'urls': {
                 'api': {
-                    'public': 'https://api.binance.vision/api/v3',  # ক্লাউড ফ্রেন্ডলি এপিআই গেটওয়ে
+                    'public': 'https://api.binance.vision/api/v3',
                     'fapi': 'https://fapi.binance.com',
                 }
             },
@@ -172,7 +167,9 @@ async def run_scanner():
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             live_status_box.markdown(f"### 🔄 নতুন স্ক্যান শুরু হচ্ছে... (সময়: {current_time})")
             
-            symbols_to_scan = await fetch_top_350_futures(exchange)
+            # এবার কয়েন লিস্ট আসবে ডিরেক্ট CoinGecko থেকে, তাই কোনো এরর আসবে না
+            symbols_to_scan = await fetch_top_350_from_coingecko()
+            
             if not symbols_to_scan:
                 st.warning("কয়েন লিস্ট লোড করা যায়নি। ৩০ সেকেন্ড পর আবার চেষ্টা করা হচ্ছে...")
                 await asyncio.sleep(30)
@@ -204,7 +201,7 @@ async def run_scanner():
                     if res:
                         bullish_coins.append(res)
                 
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.3)  # রেট লিমিট এড়াতে সামান্য বিরতি
             
             live_status_box.empty()
             
