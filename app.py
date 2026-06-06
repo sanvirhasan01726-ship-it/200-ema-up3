@@ -182,8 +182,15 @@ async def fetch_and_calculate_ema(exchange, symbol):
 async def run_scanner():
     """মূল স্ক্যানিং প্রসেস যা লুপ আকারে চলবে"""
     while True:
+        # ক্লাউড সার্ভারের রেস্ট্রিকশন এড়াতে অল্টারনেটিভ ইউএসএ/গ্লোবাল এপিআই গেটওয়ে সেট করা হলো
         exchange = ccxt.binance({
             'enableRateLimit': True,
+            'urls': {
+                'api': {
+                    'public': 'https://api.binance4.com/api/v3',  # ইউএসএ ফ্রেন্ডলি অল্টারনেটিভ এন্ডপয়েন্ট
+                    'fapi': 'https://fapi.binance.com',            # ফিউচারস এপিআই মেইন গেটওয়ে
+                }
+            },
             'options': {
                 'defaultType': 'swap'
             }
@@ -213,7 +220,7 @@ async def run_scanner():
                         </p>
                         <div class="scanning-coin">{batch[0].split('/')[0]}</div>
                         <p style="color: #64748b; font-size: 0.9rem; margin-top: 5px;">
-                            বাইনান্স সার্ভার কুলডাউন বিরতি ও সেফ মোড সক্রিয়...
+                            বাইনান্স সার্ভার কুলডাউন বিরতি ও সেф মোড সক্রিয়...
                         </p>
                     </div>
                 """, unsafe_allow_html=True)
