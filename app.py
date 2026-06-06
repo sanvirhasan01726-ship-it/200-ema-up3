@@ -6,7 +6,7 @@ from datetime import datetime
 import httpx  # CoinGecko ও Telegram API কলের জন্য
 
 # Streamlit Page Configuration
-st.set_page_config(page_title="Binance 200 EMA Scanner", layout="wide")
+st.set_page_config(page_title="Binance 200 EMA Dual Scanner", layout="wide")
 
 # Telegram Configuration
 TELEGRAM_BOT_TOKEN = "8957518460:AAE_9HaugsNNYfjOzCpbHi2nJAEKf4GSiKs"
@@ -51,23 +51,44 @@ st.markdown("""
     div[data-testid="metric-container"] {
         background-color: #111827;
         border: 1px solid #1f2937;
-        padding: 20px;
-        border-radius: 14px;
+        padding: 15px;
+        border-radius: 12px;
+    }
+    /* কালার কোডিং স্টাইল */
+    .status-up {
+        color: #00ffcc !important;
+        font-weight: bold;
+        background: rgba(0, 255, 204, 0.1);
+        padding: 4px 8px;
+        border-radius: 4px;
+    }
+    .status-down {
+        color: #ff3366 !important;
+        font-weight: bold;
+        background: rgba(255, 51, 102, 0.1);
+        padding: 4px 8px;
+        border-radius: 4px;
     }
     .binance-btn {
         display: inline-block;
-        padding: 6px 12px;
+        padding: 4px 10px;
         background: linear-gradient(135deg, #f3ba2f 0%, #d49b00 100%);
         color: #000 !important;
         font-weight: bold;
         border-radius: 6px;
         text-decoration: none;
+        font-size: 0.9rem;
+    }
+    /* ছোট কয়েন বক্স টেবিল ফরম্যাট */
+    .dataframe {
+        font-size: 0.95rem !important;
+        width: 100% !important;
     }
     </style>
 """, unsafe_allow_html=True)
 
-st.title("⚡ Premium Binance Futures 200 EMA Scanner")
-st.write("১৫ মিনিট পর পর টপ ৩৫০টি ফিউচার কয়েন অটো-স্ক্যান করে ২০০ EMA এর উপরের কয়েনগুলো নিচে লাইভ আপডেট করে এবং টেলিগ্রামে মেসেজ পাঠায়।")
+st.title("⚡ Premium Binance 200 EMA Dual Scanner")
+st.write("১৫ মিনিট পর পর টপ ৩৫০টি ফিউচার কয়েন অটো-স্ক্যান করে ২০০ EMA এর UP (Green) এবং DOWN (Red) কয়েনগুলো আলাদা করে দেখায়।")
 
 live_status_box = st.empty()
 metrics_placeholder = st.empty()
@@ -88,13 +109,11 @@ def generate_binance_url(symbol):
     clean_symbol = symbol.split(':')[0].replace('/', '')
     return f"https://www.binance.com/en/futures/{clean_symbol}"
 
-# --- COINGECKO API FOR TOP COINS (NO BLOCKING) ---
+# --- COINGECKO API FOR TOP COINS ---
 
 async def fetch_top_350_from_coingecko():
-    """মার্কেট ক্যাপ অনুযায়ী ক্র্যাশ-ফ্রি কয়েন লিস্ট কোইনগেকো থেকে নিয়ে আসবে"""
     try:
         async with httpx.AsyncClient() as client:
-            # আমেরিকার সার্ভার আইপি থেকে কয়েনগেকো ব্লক করে না
             url = "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1"
             response = await client.get(url, timeout=15.0)
             
@@ -105,7 +124,6 @@ async def fetch_top_350_from_coingecko():
             if response.status_code == 200:
                 for coin in response.json():
                     sym = coin['symbol'].upper()
-                    # স্টেবল কয়েন বাদ দেওয়া হচ্ছে
                     if sym not in ['USDT', 'USDC', 'BUSD', 'DAI', 'FDUSD']:
                         symbols.append(f"{sym}/USDT:USDT")
                         
@@ -121,9 +139,8 @@ async def fetch_top_350_from_coingecko():
     return []
 
 async def fetch_and_calculate_ema(exchange, symbol):
-    """নির্দিষ্ট কয়েনের ওহী ও পিওর পান্ডাস দিয়ে ২০০ EMA হিসাব করে"""
+    """নির্দিষ্ট কয়েনের ২০০ EMA হিসাব করে UP বা DOWN ট্রেন্ড নির্ধারণ করে"""
     try:
-        # ওহী ডাটার জন্য আমরা বাইনান্সের অফিশিয়াল চার্ট ডিরেক্টরি রিকোয়েস্ট পাঠাবো
         ohlcv = await exchange.fetch_ohlcv(symbol, timeframe='15m', limit=250)
         if len(ohlcv) < 200:
             return None
@@ -137,21 +154,33 @@ async def fetch_and_calculate_ema(exchange, symbol):
         if pd.isna(last_ema):
             return None
             
+        distance = round(((last_close - last_ema) / last_ema) * 100, 2)
+        
+        # UP এবং DOWN কন্ডিশন আলাদা করা ও কালার কোড জেনারেট করা
         if last_close > last_ema:
             return {
                 "Symbol": symbol,
                 "Price": last_close,
                 "200 EMA": round(last_ema, 4),
-                "Distance (%)": round(((last_close - last_ema) / last_ema) * 100, 2)
+                "Distance (%)": distance,
+                "Signal": "UP",
+                "Status": f'<span class="status-up">🟢 200 EMA UP</span>'
+            }
+        else:
+            return {
+                "Symbol": symbol,
+                "Price": last_close,
+                "200 EMA": round(last_ema, 4),
+                "Distance (%)": distance,
+                "Signal": "DOWN",
+                "Status": f'<span class="status-down">🔴 200 EMA DOWN</span>'
             }
     except Exception:
         pass
     return None
 
 async def run_scanner():
-    """মূল স্ক্যানিং প্রসেস যা লুপ আকারে চলবে"""
     while True:
-        # বাইনান্স এপিআই লোড করার জন্য অল্টারনেটিভ গ্লোবাল পাবলিক গেটওয়ে
         exchange = ccxt.binance({
             'enableRateLimit': True,
             'urls': {
@@ -165,9 +194,8 @@ async def run_scanner():
         
         try:
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            live_status_box.markdown(f"### 🔄 নতুন স্ক্যান শুরু হচ্ছে... (সময়: {current_time})")
+            live_status_box.markdown(f"### 🔄 নতুন ডুয়াল স্ক্যান শুরু হচ্ছে... (সময়: {current_time})")
             
-            # এবার কয়েন লিস্ট আসবে ডিরেক্ট CoinGecko থেকে, তাই কোনো এরর আসবে না
             symbols_to_scan = await fetch_top_350_from_coingecko()
             
             if not symbols_to_scan:
@@ -175,7 +203,7 @@ async def run_scanner():
                 await asyncio.sleep(30)
                 continue
                 
-            bullish_coins = []
+            all_scanned_coins = []
             total_coins = len(symbols_to_scan)
             
             batch_size = 10
@@ -187,7 +215,7 @@ async def run_scanner():
                 live_status_box.markdown(f"""
                     <div class="scanning-box">
                         <p style="color: #38bdf8; font-size: 1.2rem; margin-bottom: 5px; font-weight: 600;">
-                            🔍 বর্তমান স্ক্যানিং প্রোগ্রেস: {progress_perc}% ({min(i+batch_size, total_coins)}/{total_coins})
+                            🔍 ডুয়াল স্ক্যানিং প্রোগ্রেস: {progress_perc}% ({min(i+batch_size, total_coins)}/{total_coins})
                         </p>
                         <p style="color: #64748b; font-size: 0.9rem; margin-bottom: 5px;">বর্তমানে নিচের ১০টি কয়েন স্ক্যান করা হচ্ছে:</p>
                         <div class="coin-list-text">{running_coin_names}</div>
@@ -199,35 +227,51 @@ async def run_scanner():
                 
                 for res in results:
                     if res:
-                        bullish_coins.append(res)
+                        all_scanned_coins.append(res)
                 
-                await asyncio.sleep(0.3)  # রেট লিমিট এড়াতে সামান্য বিরতি
+                await asyncio.sleep(0.3)
             
             live_status_box.empty()
             
-            with metrics_placeholder.container():
-                col1, col2 = st.columns(2)
-                col1.metric("মোট স্ক্যান করা কয়েন", total_coins)
-                col2.metric("200 EMA-এর উপরে বুলিশ কয়েন", len(bullish_coins))
+            # UP এবং DOWN সংখ্যা আলাদা করা
+            up_coins = [c for c in all_scanned_coins if c['Signal'] == 'UP']
+            down_coins = [c for c in all_scanned_coins if c['Signal'] == 'DOWN']
             
-            if bullish_coins:
-                df_result = pd.DataFrame(bullish_coins)
+            # মেট্রিক্স ড্যাশবোর্ড আপডেট
+            with metrics_placeholder.container():
+                col1, col2, col3 = st.columns(3)
+                col1.metric("মোট স্ক্যান করা কয়েন", total_coins)
+                col2.metric("🟢 200 EMA UP (Bullish)", len(up_coins))
+                col3.metric("🔴 200 EMA DOWN (Bearish)", len(down_coins))
+            
+            if all_scanned_coins:
+                df_result = pd.DataFrame(all_scanned_coins)
+                
+                # টেবিল সুন্দর করার জন্য কলাম রি-অ্যারেঞ্জ
                 df_result['Action'] = df_result['Symbol'].apply(
-                    lambda sym: f'<a href="{generate_binance_url(sym)}" target="_blank" class="binance-btn">🔗 Trade on Binance</a>'
+                    lambda sym: f'<a href="{generate_binance_url(sym)}" target="_blank" class="binance-btn">🔗 Trade</a>'
                 )
                 
-                table_html = df_result.to_html(escape=False, index=False, classes='table table-dark')
+                # কলামের সিকোয়েন্স সাজানো ও অপ্রয়োজনীয় কলাম ড্রপ করা
+                df_display = df_result[['Symbol', 'Price', '200 EMA', 'Distance (%)', 'Status', 'Action']]
+                
+                table_html = df_display.to_html(escape=False, index=False, classes='table table-dark table-striped')
                 with table_placeholder.container():
-                    st.markdown(f"### 📈 বুলিশ কয়েন লিস্ট (Last Update: {datetime.now().strftime('%H:%M:%S')})")
+                    st.markdown(f"### 📊 লাইভ ডুয়াল মার্কেট সিগন্যাল (Last Update: {datetime.now().strftime('%H:%M:%S')})")
                     st.markdown(table_html, unsafe_allow_html=True)
                 
-                # --- টেলিগ্রাম চ্যাঙ্ক নোটিফিকেশন ---
-                header = f"🚨 <b>Binance 200 EMA Scanner Report</b> 🚨\n📅 সময়: {current_time}\n📊 মোট কয়েন: {total_coins}\n🔥 বুলিশ: {len(bullish_coins)}\n\n"
+                # --- টেলিগ্রাম চ্যাঙ্ক নোটিফিকেশন জেনারেশন ---
+                header = f"🚨 <b>Binance 200 EMA Dual Scanner Report</b> 🚨\n📅 সময়: {current_time}\n📊 মোট স্ক্যান: {total_coins}\n🟢 UP: {len(up_coins)} | 🔴 DOWN: {len(down_coins)}\n\n"
+                header += "<b>📌 সিগন্যাল তালিকা:</b>\n"
+                header += "--------------------------------------\n"
+                
                 current_chunk = header
-                for coin in bullish_coins:
+                for coin in all_scanned_coins:
                     trade_url = generate_binance_url(coin['Symbol'])
                     coin_name = coin['Symbol'].split(':')[0]
-                    coin_text = f"🔹 <b>{coin_name}</b>\n   • মূল্য: {coin['Price']}\n   • ২০০ EMA: {coin['200 EMA']}\n   • ব্যবধান: {coin['Distance (%)']}%\n   • <a href='{trade_url}'>🔗 Trade Here</a>\n\n"
+                    emoji = "🟢 [UP]" if coin['Signal'] == "UP" else "🔴 [DOWN]"
+                    
+                    coin_text = f"🔹 <b>{coin_name}</b> -> {emoji}\n   • মূল্য: {coin['Price']}\n   • ২০০ EMA: {coin['200 EMA']}\n   • ব্যবধান: {coin['Distance (%)']}%\n   • <a href='{trade_url}'>🔗 Trade Here</a>\n\n"
                     
                     if len(current_chunk) + len(coin_text) > 3000:
                         await send_telegram_message(current_chunk)
@@ -240,7 +284,7 @@ async def run_scanner():
                     await send_telegram_message(current_chunk)
             else:
                 with table_placeholder.container():
-                    st.warning("এই মুহূর্তে ২০০ EMA এর উপরে কোনো কয়েন পাওয়া যায়নি।")
+                    st.warning("কোনো ডাটা পাওয়া যায়নি।")
             
             st.info("⏱️ স্ক্যান সম্পন্ন হয়েছে। পরবর্তী স্ক্যান ১৫ মিনিট পর স্বয়ংক্রিয়ভাবে শুরু হবে।")
             await asyncio.sleep(900)
