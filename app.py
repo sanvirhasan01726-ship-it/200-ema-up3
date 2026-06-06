@@ -1,8 +1,7 @@
 import streamlit as st
-import ccxt.async_support as ccxt  # ccxt.pro এর বদলে স্ট্যান্ডার্ড এসিনক্রোনাস সাপোর্ট ব্যবহার করা হলো
+import ccxt.async_support as ccxt  # স্ট্যান্ডার্ড এসিনক্রোনাস সাপোর্ট
 import asyncio
 import pandas as pd
-import pandas_ta as ta
 from datetime import datetime
 import httpx  # Async Telegram API রিকোয়েস্টের জন্য
 
@@ -152,14 +151,16 @@ async def fetch_top_350_futures(exchange):
         return []
 
 async def fetch_and_calculate_ema(exchange, symbol):
-    """নির্দিষ্ট কয়েনের ওহী ও EMA হিসাব করে"""
+    """নির্দিষ্ট কয়েনের ওহী ও পিওর পান্ডাস দিয়ে ২০০ EMA হিসাব করে"""
     try:
         ohlcv = await exchange.fetch_ohlcv(symbol, timeframe='15m', limit=250)
         if len(ohlcv) < 200:
             return None
         
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df['ema_200'] = ta.ema(df['close'], length=200)
+        
+        # pandas_ta এর বদলে পিওর পান্ডাস দিয়ে দ্রুত ও নিখুঁত EMA বের করার লজিক
+        df['ema_200'] = df['close'].ewm(span=200, adjust=False).mean()
         
         last_close = df['close'].iloc[-1]
         last_ema = df['ema_200'].iloc[-1]
@@ -181,7 +182,6 @@ async def fetch_and_calculate_ema(exchange, symbol):
 async def run_scanner():
     """মূল স্ক্যানিং প্রসেস যা লুপ আকারে চলবে"""
     while True:
-        # প্রতি লুপে ফ্রেশ এসিনক্রোনাস কানেকশন ওপেন হবে
         exchange = ccxt.binance({
             'enableRateLimit': True,
             'options': {
@@ -201,7 +201,6 @@ async def run_scanner():
             bullish_coins = []
             total_coins = len(symbols_to_scan)
             
-            # ব্যাচ ওয়াইজ ফাস্ট স্ক্যানিং (প্রতি ব্যাচে ১০টি কয়েন)
             batch_size = 10
             for i in range(0, total_coins, batch_size):
                 batch = symbols_to_scan[i:i+batch_size]
@@ -230,13 +229,11 @@ async def run_scanner():
             
             live_status_box.empty()
             
-            # মেট্রিক্স আপডেট
             with metrics_placeholder.container():
                 col1, col2 = st.columns(2)
                 col1.metric("মোট স্ক্যান করা কয়েন", total_coins)
                 col2.metric("200 EMA-এর উপরে বুলিশ কয়েন", len(bullish_coins))
             
-            # টেবিল জেনারেশন এবং নোটিফিকেশন প্রেরণ
             if bullish_coins:
                 df_result = pd.DataFrame(bullish_coins)
                 df_result['Action'] = df_result['Symbol'].apply(
@@ -291,7 +288,7 @@ async def run_scanner():
                 empty_msg = f"🔄 <b>Scanner Update ({current_time}):</b>\nএই মুহূর্তে ২০০ EMA এর উপরে কোনো বুলিশ কয়েন পাওয়া যায়নি।"
                 await send_telegram_message(empty_msg)
             
-            st.info("⏱️ স্ক্যান সম্পন্ন হয়েছে। পরবর্তী স্ক্যান ১৫ মিনিট পর স্বয়ংক্রিয়ভাবে শুরু হবে suicide প্রতিরোধে রেস্ট মোড সক্রিয়।")
+            st.info("⏱️ স্ক্যান সম্পন্ন হয়েছে। পরবর্তী স্ক্যান ১৫ মিনিট পর স্বয়ংক্রিয়ভাবে শুরু হবে।")
             await asyncio.sleep(900)
             
         except Exception as e:
@@ -299,7 +296,6 @@ async def run_scanner():
             await asyncio.sleep(30)
             
         finally:
-            # সেশন আনক্লোজড থাকা আটকাতে বাধ্যতামুলকভাবে কানেকশন বন্ধ করা হচ্ছে
             await exchange.close()
 
 if __name__ == "__main__":
